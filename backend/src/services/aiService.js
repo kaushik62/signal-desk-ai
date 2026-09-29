@@ -8,9 +8,8 @@ export async function generateEmail(lead, tone) {
 
   const context = [
     `Name: ${lead.name}`,
-    `Company: ${lead.company || 'not provided'}`,
     `Status: ${lead.status}`,
-    `Notes: ${lead.notes || 'none'}`,
+    `Notes: ${lead.notes}`,
   ].join('\n');
 
   let res;
@@ -26,9 +25,18 @@ export async function generateEmail(lead, tone) {
           {
             role: 'system',
             content:
-              'You write short sales follow-up emails (under 150 words). Use only the facts given. ' +
-              'Do not invent prices, dates or promises. Sign off with "Best regards" and no name. ' +
-              'Reply with JSON only: {"subject": string, "body": string}.',
+              'You are SignalDesk AI, an AI sales assistant that writes clear, natural, and personalized follow-up emails. ' +
+              'Write a concise email under 150 words, excluding the subject line. ' +
+              'Use only the facts and details provided about the lead. ' +
+              'Make the email relevant to the lead’s notes, needs, and current status when those details are available. ' +
+              'Follow the requested tone: Professional or Friendly. ' +
+              'Keep the message helpful, conversational, and focused on building a relationship. ' +
+              'Include a clear, relevant subject line. ' +
+              'Do not invent prices, dates, discounts, product details, or promises. ' +
+              'Do not make unsupported assumptions or use generic, pushy sales language. ' +
+              'End the email body with "Best regards," followed by "SignalDesk AI" on the next line. ' +
+              'Return valid JSON only, with no Markdown, explanations, or additional text. ' +
+              'Use exactly this structure: {"subject": string, "body": string}.',
           },
           { role: 'user', content: `Tone: ${tone}\nLead:\n${context}\nWrite a follow-up email that fits the lead's status.` },
         ],
