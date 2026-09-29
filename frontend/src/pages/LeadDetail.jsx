@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Pencil, Mail, CalendarClock, History } from 'lucide-react';
+import { Pencil, Mail, CalendarClock, History, ArrowLeft } from 'lucide-react';
 import { api, errMsg } from '../api.js';
 import LeadForm from '../components/LeadForm.jsx';
 import FollowUpList from '../components/FollowUpList.jsx';
@@ -17,7 +17,12 @@ export default function LeadDetail() {
   }, [id]);
   useEffect(load, [load]);
 
-  if (error) return <div className="space-y-3"><ErrorBanner message={error} /><Link to="/leads" className={btnGhost}>Back to leads</Link></div>;
+  if (error) return (
+    <div className="space-y-3">
+      <ErrorBanner message={error} />
+      <Link to="/app/leads" className={btnGhost}><ArrowLeft className="h-4 w-4" /> Back to leads</Link>
+    </div>
+  );
   if (!data) return <Spinner />;
 
   const { lead, followUps } = data;
@@ -27,44 +32,85 @@ export default function LeadDetail() {
 
   return (
     <div className="space-y-6">
-      <div className={`${panel} space-y-4 p-5`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
+      {/* Back link */}
+      <Link to="/app/leads" className="inline-flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-700 transition-colors">
+        <ArrowLeft className="h-4 w-4" /> Back to leads
+      </Link>
+
+      {/* Lead card */}
+      <div className={`${panel} p-6`}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold">{lead.name}</h2>
-            <p className="text-sm text-gray-500">{lead.email}{lead.company ? ` · ${lead.company}` : ''}</p>
+            <h2 className="text-xl font-bold text-gray-900">{lead.name}</h2>
+            <p className="mt-0.5 text-sm text-gray-500">
+              {lead.email}{lead.company ? ` · ${lead.company}` : ''}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className={btnGhost} onClick={() => setEditing(true)}><Pencil className="h-4 w-4" /> Edit lead</button>
+            <button className={btnGhost} onClick={() => setEditing(true)}>
+              <Pencil className="h-4 w-4" /> Edit
+            </button>
             {canEmail ? (
               <>
-                <Link className={btnGhost} to={`/leads/${lead.id}/compose`}><CalendarClock className="h-4 w-4" /> Schedule follow-up</Link>
-                <Link className={btnPrimary} to={`/leads/${lead.id}/compose`}><Mail className="h-4 w-4" /> Generate email</Link>
+                <Link className={btnGhost} to={`/app/leads/${lead.id}/compose`}>
+                  <CalendarClock className="h-4 w-4" /> Schedule
+                </Link>
+                <Link className={btnPrimary} to={`/app/leads/${lead.id}/compose`}>
+                  <Mail className="h-4 w-4" /> Generate email
+                </Link>
               </>
-            ) : <span className="self-center text-xs text-gray-500">Emails are disabled for {lead.status.toLowerCase()} leads</span>}
+            ) : (
+              <span className="self-center text-xs text-gray-500">
+                Emails disabled for {lead.status.toLowerCase()} leads
+              </span>
+            )}
           </div>
         </div>
-        <dl className="grid gap-4 text-sm sm:grid-cols-4">
-          <div><dt className="text-gray-500">Score</dt><dd className="mt-1"><ScoreBadge score={lead.score} /></dd></div>
-          <div><dt className="text-gray-500">Status</dt><dd className="mt-1"><StatusBadge status={lead.status} /></dd></div>
-          <div><dt className="text-gray-500">Source</dt><dd className="mt-1 font-medium">{lead.source}</dd></div>
-          <div><dt className="text-gray-500">Last contacted</dt><dd className="mt-1 font-medium">{formatDate(lead.last_contacted_at)}</dd></div>
+
+        <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-4 border-t border-gray-100 pt-5">
+          <div>
+            <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1.5">Score</dt>
+            <dd><ScoreBadge score={lead.score} /></dd>
+          </div>
+          <div>
+            <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1.5">Status</dt>
+            <dd><StatusBadge status={lead.status} /></dd>
+          </div>
+          <div>
+            <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1.5">Source</dt>
+            <dd className="font-medium text-gray-900">{lead.source}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1.5">Last contacted</dt>
+            <dd className="font-medium text-gray-900">{formatDate(lead.last_contacted_at)}</dd>
+          </div>
         </dl>
-        <div>
-          <h3 className="text-sm text-gray-500">Notes</h3>
-          <p className="mt-1 whitespace-pre-wrap text-sm">{lead.notes || 'No notes yet.'}</p>
-        </div>
+
+        {lead.notes && (
+          <div className="mt-5 border-t border-gray-100 pt-5">
+            <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Notes</h3>
+            <p className="whitespace-pre-wrap text-sm text-gray-700 leading-relaxed">{lead.notes}</p>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <div className={`${panel} p-5`}>
-          <h3 className="mb-1 text-sm font-semibold">Scheduled emails</h3>
-          {scheduled.length ? <FollowUpList items={scheduled} onChange={load} showLead={false} /> : <Empty icon={CalendarClock} title="Nothing scheduled" />}
+        <div className={`${panel} p-6`}>
+          <h3 className="mb-4 text-sm font-semibold text-gray-900">Scheduled emails</h3>
+          {scheduled.length
+            ? <FollowUpList items={scheduled} onChange={load} showLead={false} />
+            : <Empty icon={CalendarClock} title="Nothing scheduled" text="Generate an email to schedule a follow-up." />
+          }
         </div>
-        <div className={`${panel} p-5`}>
-          <h3 className="mb-1 text-sm font-semibold">Follow-up history</h3>
-          {history.length ? <FollowUpList items={history} onChange={load} showLead={false} /> : <Empty icon={History} title="No follow-ups sent yet" />}
+        <div className={`${panel} p-6`}>
+          <h3 className="mb-4 text-sm font-semibold text-gray-900">Follow-up history</h3>
+          {history.length
+            ? <FollowUpList items={history} onChange={load} showLead={false} />
+            : <Empty icon={History} title="No follow-ups sent yet" />
+          }
         </div>
       </div>
+
       {editing && <LeadForm lead={lead} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
     </div>
   );

@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout.jsx';
 import AuthPage from './pages/AuthPage.jsx';
+import HomePage from './pages/HomePage.jsx';
 import Overview from './pages/Overview.jsx';
 import Leads from './pages/Leads.jsx';
 import LeadDetail from './pages/LeadDetail.jsx';
@@ -13,9 +14,15 @@ import NotFound from './pages/NotFound.jsx';
 export default function App() {
   return (
     <Routes>
+      {/* Public landing page */}
+      <Route path="/" element={<HomePage />} />
+
+      {/* Auth pages */}
       <Route path="login" element={<AuthPage mode="login" />} />
       <Route path="register" element={<AuthPage mode="register" />} />
-      <Route element={<Layout />}>
+
+      {/* Protected dashboard routes under /app */}
+      <Route path="app" element={<Layout />}>
         <Route index element={<Overview />} />
         <Route path="leads" element={<Leads />} />
         <Route path="leads/:id" element={<LeadDetail />} />
@@ -25,6 +32,8 @@ export default function App() {
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<NotFound />} />
       </Route>
+
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }

@@ -25,7 +25,7 @@ export default function FollowUpList({ items, onChange, showLead = true }) {
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{f.subject}</span>
                   <span className="block text-xs text-gray-500">
-                    {showLead && <><Link to={`/leads/${f.lead_id}`} className="text-indigo-600">{f.lead_name}</Link> · </>}
+                    {showLead && <><Link to={`/app/leads/${f.lead_id}`} className="text-brand-600 font-medium hover:underline">{f.lead_name}</Link> · </>}
                     {f.status === 'sent' ? `Sent ${formatDateTime(f.sent_at)}` : `Scheduled ${formatDateTime(f.scheduled_at)}`}
                   </span>
                 </span>
