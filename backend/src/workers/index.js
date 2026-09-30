@@ -2,93 +2,128 @@ import { Worker } from 'bullmq';
 
 import { pool } from '../config/db.js';
 import { redis } from '../config/redis.js';
-import { maintenanceQueue } from '../services/queue.js';
+
 import { sendEmail } from '../services/emailService.js';
 import { reconcile } from '../services/followUpService.js';
 import { recalcScore } from '../services/leadService.js';
-import { scanStale } from '../services/staleService.js';
+import { clearStaleCache } from '../services/staleService.js';
 
+async function updateFollowUpStatus(followUpId, status) {
+  await pool.query(
+    `UPDATE follow_ups
+     SET status = $2
+     WHERE id = $1
+       AND status = 'processing'`,
+    [followUpId, status]
+  );
+}
+
+// Process a follow-up job.
 async function processFollowUp(job) {
   const { followUpId } = job.data;
 
-  // Atomically claim the follow-up so two workers
-  // cannot process the same pending record together.
-  const { rows: [followUp] } = await pool.query(
+  const followUpResult = await pool.query(
     `UPDATE follow_ups
      SET status = 'processing'
      WHERE id = $1
-       AND status = 'pending'
+       AND status IN ('pending', 'processing')
        AND EXISTS (
          SELECT 1
-         FROM leads l
-         WHERE l.id = follow_ups.lead_id
-           AND l.status NOT IN ('Converted', 'Lost')
+         FROM leads
+         WHERE leads.id = follow_ups.lead_id
+           AND leads.status NOT IN ('Converted', 'Lost')
        )
      RETURNING *`,
     [followUpId]
   );
 
-  // Another worker may already have claimed it,
-  // or it may have been cancelled or completed.
+  const followUp = followUpResult.rows[0];
+
   if (!followUp) {
-    const { rows: [existing] } = await pool.query(
-      `SELECT f.status, l.status AS lead_status
-       FROM follow_ups f
-       JOIN leads l ON l.id = f.lead_id
-       WHERE f.id = $1`,
+    // Cancel pending follow-ups whose lead is no longer active.
+    await pool.query(
+      `UPDATE follow_ups
+       SET status = 'cancelled'
+       WHERE id = $1
+         AND status = 'pending'
+         AND EXISTS (
+           SELECT 1
+           FROM leads
+           WHERE leads.id = follow_ups.lead_id
+             AND leads.status IN ('Converted', 'Lost')
+         )`,
       [followUpId]
     );
-
-    if (
-      existing &&
-      existing.status === 'pending' &&
-      ['Converted', 'Lost'].includes(existing.lead_status)
-    ) {
-      await pool.query(
-        `UPDATE follow_ups
-         SET status = 'cancelled'
-         WHERE id = $1 AND status = 'pending'`,
-        [followUpId]
-      );
-    }
 
     return;
   }
 
+  // Get the lead and its owner.
+  const leadResult = await pool.query(
+    `SELECT email, status, user_id
+     FROM leads
+     WHERE id = $1`,
+    [followUp.lead_id]
+  );
+
+  const lead = leadResult.rows[0];
+
+  if (!lead || ['Converted', 'Lost'].includes(lead.status)) {
+    await updateFollowUpStatus(followUpId, 'cancelled');
+    return;
+  }
+
+  // Send the email.
   try {
-    // Fetch the lead details after claiming the follow-up.
-    const { rows: [lead] } = await pool.query(
-      `SELECT id, email, status
-       FROM leads
-       WHERE id = $1`,
-      [followUp.lead_id]
-    );
-
-    if (!lead || ['Converted', 'Lost'].includes(lead.status)) {
-      await pool.query(
-        `UPDATE follow_ups
-         SET status = 'cancelled'
-         WHERE id = $1 AND status = 'processing'`,
-        [followUpId]
-      );
-
-      return;
-    }
-
     await sendEmail({
       to: lead.email,
       subject: followUp.subject,
       text: followUp.email_body,
     });
+  } catch (error) {
+    // BullMQ will retry the job.
+    const maxAttempts = job.opts.attempts ?? 1;
+    const isLastAttempt = job.attemptsMade + 1 >= maxAttempts;
 
+    try {
+      await updateFollowUpStatus(
+        followUpId,
+        isLastAttempt ? 'failed' : 'pending'
+      );
+    } catch (dbError) {
+      // Preserve the original email error.
+      console.error(
+        'Failed to update follow-up status:',
+        dbError.message
+      );
+    }
+
+    throw error;
+  }
+
+  // Do not throw if this DB update fails: BullMQ retrying could
+  
+  try {
     await pool.query(
       `UPDATE follow_ups
        SET status = 'sent',
            sent_at = NOW()
-       WHERE id = $1 AND status = 'processing'`,
+       WHERE id = $1
+         AND status = 'processing'`,
       [followUpId]
     );
+  } catch (error) {
+    console.error(
+      'Email sent, but failed to mark follow-up as sent:',
+      error.message
+    );
 
+    // Investigate/reconcile it rather than automatically resending.
+    return;
+  }
+
+  // Update the lead after recording the successful email.
+  try {
     await pool.query(
       `UPDATE leads
        SET last_contacted_at = NOW(),
@@ -103,28 +138,26 @@ async function processFollowUp(job) {
 
     await recalcScore(followUp.lead_id);
   } catch (error) {
-    const maxAttempts = job.opts.attempts ?? 1;
-    const isLastAttempt = job.attemptsMade + 1 >= maxAttempts;
+    // The email is already sent. Do not retry the email because
 
-    // Let BullMQ retry failed jobs. Only mark the record
-    // failed when no more attempts remain.
-    await pool.query(
-      `UPDATE follow_ups
-       SET status = $2
-       WHERE id = $1 AND status = 'processing'`,
-      [followUpId, isLastAttempt ? 'failed' : 'pending']
+    console.error(
+      'Email sent, but failed to update lead:',
+      error.message
     );
+  }
 
-    throw error;
+  // Cache cleanup must not cause the email job to be retried.
+  try {
+    await clearStaleCache(lead.user_id);
+  } catch (error) {
+    console.error(
+      'Failed to clear stale-lead cache:',
+      error.message
+    );
   }
 }
 
-async function processMaintenance(job) {
-  if (job.name === 'scan') {
-    await scanStale();
-  }
-}
-
+// Start BullMQ workers.
 export async function startWorkers() {
   const followUpWorker = new Worker(
     'follow-ups',
@@ -135,45 +168,22 @@ export async function startWorkers() {
     }
   );
 
-  const maintenanceWorker = new Worker(
-    'maintenance',
-    processMaintenance,
-    {
-      connection: redis,
-      concurrency: 1,
-    }
-  );
-
   followUpWorker.on('error', (error) => {
-    console.error('Follow-up worker error:', error.message);
+    console.error(
+      'Follow-up worker error:',
+      error.message
+    );
   });
 
   followUpWorker.on('failed', (job, error) => {
     console.error(
-      `Follow-up job ${job?.id ?? 'unknown'} failed:`,
+      `Follow-up job ${job?.id} failed:`,
       error.message
     );
   });
 
-  maintenanceWorker.on('error', (error) => {
-    console.error('Maintenance worker error:', error.message);
-  });
-
-  maintenanceWorker.on('failed', (job, error) => {
-    console.error(
-      `Maintenance job ${job?.id ?? 'unknown'} failed:`,
-      error.message
-    );
-  });
-
-  await maintenanceQueue.upsertJobScheduler(
-    'stale-scan',
-    { every: 10 * 60 * 1000 },
-    { name: 'scan' }
-  );
-
+  // Restore pending follow-ups to the queue.
   await reconcile();
-  await scanStale();
 
-  return [followUpWorker, maintenanceWorker];
+  return [followUpWorker];
 }

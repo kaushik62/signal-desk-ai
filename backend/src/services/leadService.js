@@ -2,6 +2,7 @@ import { pool } from '../config/db.js';
 import { httpError } from '../middleware/errorHandler.js';
 import { computeScore } from './scoring.js';
 import { cancelForLead } from './followUpService.js';
+import { clearStaleCache } from './staleService.js';
 
 export const STATUSES = [
   'New',
@@ -105,32 +106,33 @@ export async function listLeads(userId, query = {}) {
     conditions.push(`source = $${params.length}`);
   }
 
-  const where = conditions.join(' AND ');
-  const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 50);
   const page = Math.max(Number(query.page) || 1, 1);
-  const sort = query.sort === 'created' ? 'created_at' : 'score';
-  const order = query.order === 'asc' ? 'ASC' : 'DESC';
-  const offset = (page - 1) * limit;
 
-  const [{ rows: [{ total }] }, { rows: leads }] = await Promise.all([
+  const [count, result] = await Promise.all([
     pool.query(
-      `SELECT COUNT(*)::int AS total FROM leads WHERE ${where}`,
+      `SELECT COUNT(*)::int AS total
+       FROM leads
+       WHERE ${conditions.join(' AND ')}`,
       params
     ),
+
     pool.query(
-      `SELECT * FROM leads
-       WHERE ${where}
-       ORDER BY ${sort} ${order}, created_at DESC
-       LIMIT ${limit} OFFSET ${offset}`,
+      `SELECT *
+       FROM leads
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY ${query.sort === 'created' ? 'created_at' : 'score'
+      } ${query.order === 'asc' ? 'ASC' : 'DESC'},
+       created_at DESC
+       LIMIT 10 OFFSET ${(page - 1) * 10}`,
       params
     ),
   ]);
 
   return {
-    leads,
-    total,
+    leads: result.rows,
+    total: count.rows[0].total,
     page,
-    pages: Math.max(1, Math.ceil(total / limit)),
+    pages: Math.ceil(count.rows[0].total / 10),
   };
 }
 
@@ -173,6 +175,8 @@ export async function createLead(userId, body) {
       contacted,
     ]
   );
+
+  await clearStaleCache(userId);
 
   return created;
 }
@@ -217,6 +221,8 @@ export async function updateLead(userId, id, body) {
     await cancelForLead(id);
   }
 
+  await clearStaleCache(userId);
+
   return updated;
 }
 
@@ -229,4 +235,6 @@ export async function deleteLead(userId, id) {
     'DELETE FROM leads WHERE id = $1 AND user_id = $2',
     [id, userId]
   );
+
+  await clearStaleCache(userId);
 }

@@ -4,9 +4,7 @@ import { withTimeout } from '../config/redis.js';
 import { httpError } from '../middleware/errorHandler.js';
 import { isUuid } from '../middleware/auth.js';
 
-const RETRY_DELAY = 30000;
-
-// Add a follow-up to BullMQ
+// Add a follow-up job to BullMQ.
 async function addJob(followUp) {
   const delay = Math.max(
     0,
@@ -20,67 +18,57 @@ async function addJob(followUp) {
       {
         jobId: followUp.id,
         delay,
-        attempts: 5,
-        backoff: {
-          type: 'exponential',
-          delay: RETRY_DELAY,
-        },
-        removeOnComplete: true,
       }
     ),
-    3000
+    5000
   );
 }
 
-// Remove a job from BullMQ
-async function removeJob(followUpId) {
+// Remove a job from BullMQ.
+
+async function removeJob(id) {
   try {
     const job = await withTimeout(
-      followUpQueue.getJob(followUpId),
+      followUpQueue.getJob(id),
       3000
     );
 
-    if (job && await job.isFinished() === false) {
-      await job.remove();
+    if (!job) return;
+
+    const state = await withTimeout(
+      job.getState(),
+      3000
+    );
+
+    if (state === 'waiting' || state === 'delayed' || state === 'waiting-children') {
+      await withTimeout(job.remove(), 3000);
     }
   } catch (error) {
     console.error('Could not remove job:', error.message);
   }
 }
 
-// Schedule a follow-up
-export async function scheduleFollowUp(
-  userId,
-  { leadId, subject, emailBody, scheduledAt } = {}
-) {
-  if (!isUuid(leadId)) {
-    throw httpError(400, 'A valid lead is required');
-  }
-
-  const leadResult = await pool.query(
-    `SELECT status
-     FROM leads
-     WHERE id = $1 AND user_id = $2`,
-    [leadId, userId]
-  );
-
-  const lead = leadResult.rows[0];
-
-  if (!lead) {
-    throw httpError(404, 'Lead not found');
-  }
-
-  if (['Converted', 'Lost'].includes(lead.status)) {
-    throw httpError(400, 'Cannot email a converted or lost lead');
-  }
-
+// Validate follow-up input.
+function validateFollowUp(data) {
   const errors = {};
 
-  if (!subject?.trim() || subject.length > 200) {
+  const subject = data.subject;
+  const emailBody = data.emailBody;
+  const scheduledAt = data.scheduledAt;
+
+  if (
+    typeof subject !== 'string' ||
+    !subject.trim() ||
+    subject.trim().length > 200
+  ) {
     errors.subject = 'Subject is required (max 200 characters)';
   }
 
-  if (!emailBody?.trim() || emailBody.length > 4000) {
+  if (
+    typeof emailBody !== 'string' ||
+    !emailBody.trim() ||
+    emailBody.trim().length > 4000
+  ) {
     errors.emailBody = 'Email body is required (max 4000 characters)';
   }
 
@@ -90,7 +78,10 @@ export async function scheduleFollowUp(
 
   if (Number.isNaN(scheduledTime.getTime())) {
     errors.scheduledAt = 'Enter a valid date and time';
-  } else if (scheduledAt && scheduledTime.getTime() < Date.now() - 60000) {
+  } else if (
+    scheduledAt &&
+    scheduledTime.getTime() < Date.now() - 60000
+  ) {
     errors.scheduledAt = 'Choose a time in the future';
   }
 
@@ -98,28 +89,70 @@ export async function scheduleFollowUp(
     throw httpError(400, 'Fix the highlighted fields', errors);
   }
 
+  return {
+    subject: subject.trim(),
+    emailBody: emailBody.trim(),
+    scheduledTime,
+  };
+}
+
+// Create and schedule a follow-up.
+export async function scheduleFollowUp(userId, data) {
+  const { leadId } = data;
+
+  if (!isUuid(leadId)) {
+    throw httpError(400, 'A valid lead is required');
+  }
+
+  const { subject, emailBody, scheduledTime } =
+    validateFollowUp(data);
+
+  const { rows } = await pool.query(
+    `SELECT status
+     FROM leads
+     WHERE id = $1
+       AND user_id = $2`,
+    [leadId, userId]
+  );
+
+  const lead = rows[0];
+
+  if (!lead) {
+    throw httpError(404, 'Lead not found');
+  }
+
+  if (['Converted', 'Lost'].includes(lead.status)) {
+    throw httpError(400, 'Cannot email a converted or lost lead');
+  }
+
   const result = await pool.query(
     `INSERT INTO follow_ups
        (user_id, lead_id, subject, email_body, scheduled_at)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [userId, leadId, subject.trim(), emailBody.trim(), scheduledTime]
+    [userId, leadId, subject, emailBody, scheduledTime]
   );
 
   const followUp = result.rows[0];
 
-  // Save in PostgreSQL even if Redis is unavailable
   try {
     await addJob(followUp);
   } catch (error) {
+
+    // reconcile() can restore it when Redis is available.
+
     console.error('Could not queue follow-up:', error.message);
   }
 
   return followUp;
 }
 
-// Get follow-ups
-export async function listFollowUps(userId, { status, leadId } = {}) {
+// Get a user's follow-ups.
+export async function listFollowUps(userId, data = {}) {
+  const { status, leadId } = data;
+
+  const params = [userId];
+
   let query = `
     SELECT f.*, l.name AS lead_name
     FROM follow_ups f
@@ -127,28 +160,34 @@ export async function listFollowUps(userId, { status, leadId } = {}) {
     WHERE f.user_id = $1
   `;
 
-  const params = [userId];
-
   if (status) {
     params.push(status);
     query += ` AND f.status = $${params.length}`;
   }
 
   if (leadId) {
+    if (!isUuid(leadId)) {
+      throw httpError(400, 'A valid lead is required');
+    }
+
     params.push(leadId);
     query += ` AND f.lead_id = $${params.length}`;
   }
 
-  query += ' ORDER BY f.scheduled_at DESC LIMIT 200';
+  query += ' ORDER BY f.scheduled_at DESC LIMIT 10';
 
-  const result = await pool.query(query, params);
+  const { rows } = await pool.query(query, params);
 
-  return result.rows;
+  return rows;
 }
 
-// Cancel a pending follow-up
+// Cancel a pending follow-up.
 export async function cancelFollowUp(userId, followUpId) {
-  const result = await pool.query(
+  if (!isUuid(followUpId)) {
+    throw httpError(400, 'A valid follow-up is required');
+  }
+
+  const { rows: [followUp] } = await pool.query(
     `UPDATE follow_ups
      SET status = 'cancelled'
      WHERE id = $1
@@ -158,10 +197,11 @@ export async function cancelFollowUp(userId, followUpId) {
     [followUpId, userId]
   );
 
-  const followUp = result.rows[0];
-
   if (!followUp) {
-    throw httpError(409, 'Only pending follow-ups can be cancelled');
+    throw httpError(
+      409,
+      'Only pending follow-ups can be cancelled'
+    );
   }
 
   await removeJob(followUpId);
@@ -169,9 +209,13 @@ export async function cancelFollowUp(userId, followUpId) {
   return followUp;
 }
 
-// Retry a failed follow-up immediately
+// Retry a failed follow-up immediately.
 export async function retryFollowUp(userId, followUpId) {
-  const result = await pool.query(
+  if (!isUuid(followUpId)) {
+    throw httpError(400, 'A valid follow-up is required');
+  }
+
+  const { rows: [followUp] } = await pool.query(
     `UPDATE follow_ups
      SET status = 'pending',
          scheduled_at = NOW()
@@ -182,15 +226,31 @@ export async function retryFollowUp(userId, followUpId) {
     [followUpId, userId]
   );
 
-  const followUp = result.rows[0];
-
   if (!followUp) {
-    throw httpError(409, 'Only failed follow-ups can be retried');
+    throw httpError(
+      409,
+      'Only failed follow-ups can be retried'
+    );
   }
 
-  await removeJob(followUpId);
-
   try {
+    
+    // remove it first so the new job can be added.
+    const existingJob = await followUpQueue.getJob(followUpId);
+
+    if (existingJob) {
+      const state = await existingJob.getState();
+
+      if (
+        state === 'failed' ||
+        state === 'completed' ||
+        state === 'waiting' ||
+        state === 'delayed'
+      ) {
+        await existingJob.remove();
+      }
+    }
+
     await addJob(followUp);
   } catch (error) {
     console.error('Could not queue follow-up:', error.message);
@@ -199,9 +259,9 @@ export async function retryFollowUp(userId, followUpId) {
   return followUp;
 }
 
-// Cancel pending follow-ups for a lead
+// Cancel all pending follow-ups for a lead.
 export async function cancelForLead(leadId) {
-  const result = await pool.query(
+  const { rows } = await pool.query(
     `UPDATE follow_ups
      SET status = 'cancelled'
      WHERE lead_id = $1
@@ -210,28 +270,34 @@ export async function cancelForLead(leadId) {
     [leadId]
   );
 
-  await Promise.all(
-    result.rows.map((followUp) => removeJob(followUp.id))
-  );
+  for (const followUp of rows) {
+    await removeJob(followUp.id);
+  }
 }
 
-// Restore pending follow-ups missing from BullMQ
+// Restore pending follow-ups missing from BullMQ.
 export async function reconcile() {
   try {
-    const result = await pool.query(
+    const { rows } = await pool.query(
       `SELECT id, scheduled_at
        FROM follow_ups
        WHERE status = 'pending'`
     );
 
-    for (const followUp of result.rows) {
-      const job = await followUpQueue.getJob(followUp.id);
+    for (const followUp of rows) {
+      const job = await withTimeout(
+        followUpQueue.getJob(followUp.id),
+        3000
+      );
 
       if (!job) {
         await addJob(followUp);
       }
     }
   } catch (error) {
-    console.error('Could not restore follow-up jobs:', error.message);
+    console.error(
+      'Could not restore follow-up jobs:',
+      error.message
+    );
   }
 }

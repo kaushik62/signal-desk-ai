@@ -1,53 +1,60 @@
 import { pool } from '../config/db.js';
 import { redis } from '../config/redis.js';
 
-const KEY = 'stale-leads';
+const CACHE_TTL = 300;
 
-const STALE_SQL = `
-  SELECT id, user_id, name,
-         COALESCE(last_contacted_at, created_at) AS last_contacted_at,
-         GREATEST(0, FLOOR(EXTRACT(EPOCH FROM
-           NOW() - COALESCE(last_contacted_at, created_at)
-         ) / 86400))::int AS inactive_days
-  FROM leads
-  WHERE status NOT IN ('Converted', 'Lost')
-    AND COALESCE(last_contacted_at, created_at) < NOW() - INTERVAL '7 days'
-`;
-
-export async function scanStale() {
-  const { rows } = await pool.query(
-    `${STALE_SQL} ORDER BY last_contacted_at ASC`
-  );
-
-  const users = {};
-
-  for (const lead of rows) {
-    (users[lead.user_id] ||= []).push(lead);
-  }
-
-  const pipeline = redis.multi().del(KEY);
-
-  for (const [userId, leads] of Object.entries(users)) {
-    pipeline.hset(KEY, userId, JSON.stringify(leads));
-  }
-
-  await pipeline.exec();
-}
-
+// Get stale leads for a specific user
 export async function getStaleLeads(userId) {
-  const cached = await redis.hget(KEY, userId);
+  const cacheKey = `stale-leads:${userId}`;
 
-  if (cached) {
-    return JSON.parse(cached).slice(0, 10);
+  const cached = await redis.get(cacheKey);
+
+  if (cached !== null) {
+    return JSON.parse(cached);
   }
 
-  const { rows } = await pool.query(
-    `${STALE_SQL}
-     AND user_id = $1
-     ORDER BY last_contacted_at ASC
-     LIMIT 10`,
+  // 2. Fetch stale leads from PostgreSQL
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        user_id,
+        name,
+        COALESCE(last_contacted_at, created_at) AS last_contacted_at,
+        GREATEST(
+          0,
+          FLOOR(
+            EXTRACT(
+              EPOCH FROM (
+                NOW() - COALESCE(last_contacted_at, created_at)
+              )
+            ) / 86400
+          )
+        )::int AS inactive_days
+      FROM leads
+      WHERE user_id = $1
+        AND status NOT IN ('Converted', 'Lost')
+        AND COALESCE(last_contacted_at, created_at)
+            < NOW() - INTERVAL '7 days'
+      ORDER BY COALESCE(last_contacted_at, created_at) ASC
+      LIMIT 10
+    `,
     [userId]
   );
 
-  return rows;
+  await redis.set(
+    cacheKey,
+    JSON.stringify(result.rows),
+    'EX',
+    CACHE_TTL
+  );
+
+  return result.rows;
+}
+
+// Clear cache 
+export async function clearStaleCache(userId) {
+  const cacheKey = `stale-leads:${userId}`;
+
+  await redis.del(cacheKey);
 }

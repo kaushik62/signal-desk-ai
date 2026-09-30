@@ -1,18 +1,12 @@
 import { pool } from '../config/db.js';
 import { getStaleLeads } from './staleService.js';
 
-// Allow only 7, 30, or 90 days
 export function clampDays(days) {
   days = Number(days);
 
-  if (days === 7 || days === 30 || days === 90) {
-    return days;
-  }
-
-  return 30;
+  return [7, 30, 90].includes(days) ? days : 30;
 }
 
-// Get leads created each day
 async function getTimeline(userId, days) {
   const result = await pool.query(
     `SELECT
@@ -29,13 +23,8 @@ async function getTimeline(userId, days) {
   return result.rows;
 }
 
-// Count leads by source or status
 async function getDistribution(type, userId) {
-  let column = 'status';
-
-  if (type === 'source') {
-    column = 'source';
-  }
+  const column = type === 'source' ? 'source' : 'status';
 
   const result = await pool.query(
     `SELECT
@@ -51,8 +40,9 @@ async function getDistribution(type, userId) {
   return result.rows;
 }
 
-// Get analytics
 export async function getAnalytics(userId, days) {
+  days = clampDays(days);
+
   const result = await pool.query(
     `SELECT
        COUNT(*)::int AS total,
@@ -65,59 +55,48 @@ export async function getAnalytics(userId, days) {
     [userId, days]
   );
 
-  const totalLeads = result.rows[0].total;
-  const convertedLeads = result.rows[0].converted;
+  const total = result.rows[0].total;
+  const converted = result.rows[0].converted;
 
-  let conversionRate = 0;
-
-  if (totalLeads > 0) {
-    conversionRate = Math.round(
-      (convertedLeads / totalLeads) * 1000
-    ) / 10;
-  }
+  const conversionRate = total
+    ? Math.round((converted / total) * 1000) / 10
+    : 0;
 
   const timeline = await getTimeline(userId, days);
-  const sourceData = await getDistribution('source', userId);
-  const statusData = await getDistribution('status', userId);
+  const bySource = await getDistribution('source', userId);
+  const byStatus = await getDistribution('status', userId);
 
   return {
-    total: totalLeads,
-    converted: convertedLeads,
+    total,
+    converted,
     conversionRate,
     timeline,
-    bySource: sourceData,
-    byStatus: statusData,
+    bySource,
+    byStatus,
   };
 }
 
-// Get dashboard data
 export async function getDashboard(userId, days) {
-  // Get lead counts
+  days = clampDays(days);
+
   const result = await pool.query(
     `SELECT
        COUNT(*)::int AS total,
-
        COUNT(*) FILTER (
          WHERE score >= 70
            AND status NOT IN ('Converted', 'Lost')
        )::int AS hot,
-
        COUNT(*) FILTER (
          WHERE status = 'Converted'
        )::int AS converted,
-
        COUNT(*) FILTER (
          WHERE created_at >= NOW() - INTERVAL '7 days'
        )::int AS new_this_week
-
      FROM leads
      WHERE user_id = $1`,
     [userId]
   );
 
-  const leadSummary = result.rows[0];
-
-  // Count pending follow-ups
   const followUpResult = await pool.query(
     `SELECT COUNT(*)::int AS pending
      FROM follow_ups
@@ -126,23 +105,17 @@ export async function getDashboard(userId, days) {
     [userId]
   );
 
-  const pendingFollowUps = followUpResult.rows[0].pending;
-
-  // Get chart and stale lead data
-  const statusData = await getDistribution('status', userId);
+  const byStatus = await getDistribution('status', userId);
   const timeline = await getTimeline(userId, days);
-  const staleLeads = await getStaleLeads(userId);
+  const stale = await getStaleLeads(userId);
 
   return {
     summary: {
-      total: leadSummary.total,
-      hot: leadSummary.hot,
-      converted: leadSummary.converted,
-      new_this_week: leadSummary.new_this_week,
-      pending: pendingFollowUps,
+      ...result.rows[0],
+      pending: followUpResult.rows[0].pending,
     },
-    byStatus: statusData,
+    byStatus,
     timeline,
-    stale: staleLeads,
+    stale,
   };
 }
