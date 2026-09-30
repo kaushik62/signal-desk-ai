@@ -4,7 +4,9 @@ import { httpError } from './errorHandler.js';
 
 export const requireAuth = (req, res, next) => {
   try {
-    req.userId = jwt.verify(req.cookies.token, env.jwtSecret).sub;
+    const token = req.cookies?.token || req.headers?.authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) throw new Error('No token');
+    req.userId = jwt.verify(token, env.jwtSecret).sub;
     next();
   } catch {
     next(httpError(401, 'Please sign in to continue'));

@@ -7,13 +7,16 @@ const CACHE_TTL = 300;
 export async function getStaleLeads(userId) {
   const cacheKey = `stale-leads:${userId}`;
 
-  const cached = await redis.get(cacheKey);
-
-  if (cached !== null) {
-    return JSON.parse(cached);
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached !== null) {
+      return JSON.parse(cached);
+    }
+  } catch (err) {
+    console.error('Redis cache error in getStaleLeads:', err.message);
   }
 
-  // 2. Fetch stale leads from PostgreSQL
+  // Fetch stale leads from PostgreSQL
   const result = await pool.query(
     `
       SELECT
@@ -42,12 +45,16 @@ export async function getStaleLeads(userId) {
     [userId]
   );
 
-  await redis.set(
-    cacheKey,
-    JSON.stringify(result.rows),
-    'EX',
-    CACHE_TTL
-  );
+  try {
+    await redis.set(
+      cacheKey,
+      JSON.stringify(result.rows),
+      'EX',
+      CACHE_TTL
+    );
+  } catch (err) {
+    console.error('Redis set error in getStaleLeads:', err.message);
+  }
 
   return result.rows;
 }
@@ -56,5 +63,9 @@ export async function getStaleLeads(userId) {
 export async function clearStaleCache(userId) {
   const cacheKey = `stale-leads:${userId}`;
 
-  await redis.del(cacheKey);
+  try {
+    await redis.del(cacheKey);
+  } catch (err) {
+    console.error('Redis del error in clearStaleCache:', err.message);
+  }
 }

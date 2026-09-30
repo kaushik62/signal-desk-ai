@@ -34,17 +34,30 @@ if (!process.env.JWT_SECRET) {
   }
 }
 
+const isDocker = fs.existsSync('/.dockerenv');
+
 const pgUser = process.env.POSTGRES_USER || 'admin';
 const pgPass = process.env.POSTGRES_PASSWORD || 'root';
-const pgHost = process.env.POSTGRES_HOST || 'localhost';
+let pgHost = process.env.POSTGRES_HOST || (isDocker ? 'postgres' : 'localhost');
 const pgPort = process.env.POSTGRES_PORT || '5432';
 const pgDb = process.env.POSTGRES_DB || 'leadassistant';
+
+let dbUrl = process.env.DATABASE_URL || `postgres://${pgUser}:${pgPass}@${pgHost}:${pgPort}/${pgDb}`;
+let redisHost = process.env.REDIS_HOST || (isDocker ? 'redis' : '127.0.0.1');
+
+if (!isDocker) {
+  if (redisHost === 'redis') redisHost = '127.0.0.1';
+  if (pgHost === 'postgres') pgHost = 'localhost';
+  if (dbUrl.includes('@postgres:')) {
+    dbUrl = dbUrl.replace('@postgres:', '@localhost:');
+  }
+}
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT) || Number(process.env.BACKEND_PORT) || 5000,
-  databaseUrl: process.env.DATABASE_URL || `postgres://${pgUser}:${pgPass}@${pgHost}:${pgPort}/${pgDb}`,
-  redisHost: process.env.REDIS_HOST || '127.0.0.1',
+  databaseUrl: dbUrl,
+  redisHost,
   redisPort: Number(process.env.REDIS_PORT) || 6379,
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
   jwtSecret: process.env.JWT_SECRET || 'fallback_secret_for_dev_mode_123',

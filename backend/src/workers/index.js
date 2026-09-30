@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq';
 
 import { pool } from '../config/db.js';
-import { redis } from '../config/redis.js';
+import { redisConfig } from '../config/redis.js';
 
 import { sendEmail } from '../services/emailService.js';
 import { reconcile } from '../services/followUpService.js';
@@ -13,7 +13,7 @@ async function updateFollowUpStatus(followUpId, status) {
     `UPDATE follow_ups
      SET status = $2
      WHERE id = $1
-       AND status = 'processing'`,
+       AND status IN ('sending', 'processing')`,
     [followUpId, status]
   );
 }
@@ -22,11 +22,13 @@ async function updateFollowUpStatus(followUpId, status) {
 async function processFollowUp(job) {
   const { followUpId } = job.data;
 
+  // Atomically claim the pending follow-up. Only transition from 'pending' to 'sending'
+  // to prevent race conditions or duplicate sends between workers.
   const followUpResult = await pool.query(
     `UPDATE follow_ups
-     SET status = 'processing'
+     SET status = 'sending'
      WHERE id = $1
-       AND status IN ('pending', 'processing')
+       AND status = 'pending'
        AND EXISTS (
          SELECT 1
          FROM leads
@@ -40,7 +42,7 @@ async function processFollowUp(job) {
   const followUp = followUpResult.rows[0];
 
   if (!followUp) {
-    // Cancel pending follow-ups whose lead is no longer active.
+    // Check if the follow-up was pending but the lead was converted or lost
     await pool.query(
       `UPDATE follow_ups
        SET status = 'cancelled'
@@ -55,6 +57,7 @@ async function processFollowUp(job) {
       [followUpId]
     );
 
+    // If already sent or claimed by another worker, do not duplicate
     return;
   }
 
@@ -68,7 +71,7 @@ async function processFollowUp(job) {
 
   const lead = leadResult.rows[0];
 
-  if (!lead || ['Converted', 'Lost'].includes(lead.status)) {
+  if (!lead || ['Converted', 'Lost'].includes(lead.status) || !lead.email) {
     await updateFollowUpStatus(followUpId, 'cancelled');
     return;
   }
@@ -82,8 +85,8 @@ async function processFollowUp(job) {
     });
   } catch (error) {
     // BullMQ will retry the job.
-    const maxAttempts = job.opts.attempts ?? 1;
-    const isLastAttempt = job.attemptsMade + 1 >= maxAttempts;
+    const maxAttempts = job.opts?.attempts ?? 5;
+    const isLastAttempt = (job.attemptsMade ?? 0) + 1 >= maxAttempts;
 
     try {
       await updateFollowUpStatus(
@@ -93,7 +96,7 @@ async function processFollowUp(job) {
     } catch (dbError) {
       // Preserve the original email error.
       console.error(
-        'Failed to update follow-up status:',
+        'Failed to update follow-up status on email failure:',
         dbError.message
       );
     }
@@ -101,15 +104,14 @@ async function processFollowUp(job) {
     throw error;
   }
 
-  // Do not throw if this DB update fails: BullMQ retrying could
-  
+  // Mark follow-up as sent.
   try {
     await pool.query(
       `UPDATE follow_ups
        SET status = 'sent',
            sent_at = NOW()
        WHERE id = $1
-         AND status = 'processing'`,
+         AND status IN ('sending', 'processing')`,
       [followUpId]
     );
   } catch (error) {
@@ -117,8 +119,6 @@ async function processFollowUp(job) {
       'Email sent, but failed to mark follow-up as sent:',
       error.message
     );
-
-    // Investigate/reconcile it rather than automatically resending.
     return;
   }
 
@@ -138,8 +138,6 @@ async function processFollowUp(job) {
 
     await recalcScore(followUp.lead_id);
   } catch (error) {
-    // The email is already sent. Do not retry the email because
-
     console.error(
       'Email sent, but failed to update lead:',
       error.message
@@ -163,7 +161,7 @@ export async function startWorkers() {
     'follow-ups',
     processFollowUp,
     {
-      connection: redis,
+      connection: redisConfig,
       concurrency: 5,
     }
   );
@@ -182,7 +180,7 @@ export async function startWorkers() {
     );
   });
 
-  // Restore pending follow-ups to the queue.
+  // Restore pending follow-ups to the queue and reconcile stuck jobs.
   await reconcile();
 
   return [followUpWorker];

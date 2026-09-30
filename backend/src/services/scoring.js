@@ -29,26 +29,20 @@ export function computeScore(lead, sentFollowUps = 0) {
     const daysSinceContact =
       (Date.now() - new Date(last_contacted_at)) / (1000 * 60 * 60 * 24);
 
-    if (last_contacted_at) {
-      const daysSinceContact =
-        (Date.now() - new Date(last_contacted_at)) /
-        (1000 * 60 * 60 * 24);
-
-      if (daysSinceContact > 30) {
-        score -= 30;
-      } else if (daysSinceContact > 14) {
-        score -= 15;
-      } else if (daysSinceContact <= 3) {
-        score += 15;
-      } else if (daysSinceContact <= 7) {
-        score += 8;
-      }
+    if (daysSinceContact > 30) {
+      score -= 30;
+    } else if (daysSinceContact > 14) {
+      score -= 15;
+    } else if (daysSinceContact <= 3) {
+      score += 15;
+    } else if (daysSinceContact <= 7) {
+      score += 8;
     }
-
   }
 
   // 4. Add 2 points for each follow-up (maximum 4 points)
-  score += Math.min(sentFollowUps, 2) * 2;
+  const validFollowUps = Math.max(0, Number(sentFollowUps) || 0);
+  score += Math.min(validFollowUps, 2) * 2;
 
   // 5. Keep the score between 0 and 100
   return Math.max(0, Math.min(100, score));

@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS follow_ups (
   email_body  TEXT NOT NULL,
   scheduled_at TIMESTAMPTZ NOT NULL,
   status      TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending','sending','sent','failed','cancelled')),
+    CHECK (status IN ('pending','sending','processing','sent','failed','cancelled')),
   sent_at     TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

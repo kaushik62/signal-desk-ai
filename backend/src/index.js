@@ -1,13 +1,16 @@
 import 'dotenv/config';
+import { env } from './config/env.js';
 import app from "./app.js";
 import { pool, initDb } from './config/db.js';
 import { redis } from './config/redis.js';
 import { startWorkers } from './workers/index.js';
+import { closeQueues } from './services/queue.js';
+import { closeEmailConnection } from './services/emailService.js';
 
-const PORT = Number(process.env.BACKEND_PORT) || 5000;
+const PORT = env.port;
 
 // Check required environment variables
-if (!process.env.JWT_SECRET) {
+if (!env.jwtSecret) {
   console.error('JWT_SECRET is missing from .env');
   process.exit(1);
 }
@@ -24,7 +27,6 @@ async function startServer() {
     // Start Express server
     const server = app.listen(PORT, () => {
       console.log(`API listening on port ${PORT}`);
-
     });
 
     // Graceful shutdown
@@ -41,6 +43,12 @@ async function startServer() {
       await Promise.allSettled(
         workers.map((worker) => worker.close())
       );
+
+      await closeQueues().catch((err) => {
+        console.error('Error closing queues:', err.message);
+      });
+
+      closeEmailConnection();
 
       await Promise.allSettled([
         pool.end(),
@@ -63,5 +71,6 @@ async function startServer() {
     process.exit(1);
   }
 }
+
 
 startServer();

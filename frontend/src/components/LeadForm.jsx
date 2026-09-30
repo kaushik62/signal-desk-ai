@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, UserRound, Mail, FileText } from 'lucide-react';
+import { X, UserRound, Mail, FileText, Building2 } from 'lucide-react';
 import { api, errMsg, fieldErrors } from '../api.js';
 import {
   Field,
@@ -15,6 +15,7 @@ export default function LeadForm({ lead, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: lead?.name ?? '',
     email: lead?.email ?? '',
+    company: lead?.company ?? '',
     source: lead?.source ?? 'Website',
     status: lead?.status ?? 'New',
     notes: lead?.notes ?? '',
@@ -61,6 +62,7 @@ export default function LeadForm({ lead, onClose, onSaved }) {
     const nextErrors = {};
     const name = form.name.trim();
     const email = form.email.trim();
+    const company = form.company.trim();
     const notes = form.notes.trim();
 
     if (!name) {
@@ -77,9 +79,11 @@ export default function LeadForm({ lead, onClose, onSaved }) {
       nextErrors.email = 'Email must be 254 characters or fewer.';
     }
 
-    if (!notes) {
-      nextErrors.notes = 'Notes are required.';
-    } else if (notes.length > 5000) {
+    if (company.length > 100) {
+      nextErrors.company = 'Company must be 100 characters or fewer.';
+    }
+
+    if (notes.length > 5000) {
       nextErrors.notes = 'Notes must be 5000 characters or fewer.';
     }
 
@@ -100,9 +104,10 @@ export default function LeadForm({ lead, onClose, onSaved }) {
     const payload = {
       name: form.name.trim(),
       email: form.email.trim(),
+      company: form.company.trim() || null,
       source: form.source,
       status: form.status,
-      notes: form.notes.trim(),
+      notes: form.notes.trim() || null,
     };
 
     setBusy(true);
@@ -214,6 +219,20 @@ export default function LeadForm({ lead, onClose, onSaved }) {
                 aria-invalid={Boolean(errors.email)}
               />
             </Field>
+
+            <Field label="Company" error={errors.company}>
+              <input
+                type="text"
+                name="company"
+                autoComplete="organization"
+                maxLength={100}
+                placeholder="e.g. Acme Corp"
+                className={inputCls}
+                value={form.company}
+                onChange={set('company')}
+                aria-invalid={Boolean(errors.company)}
+              />
+            </Field>
           </div>
 
           <div className="border-t border-slate-100 pt-5">
@@ -263,16 +282,15 @@ export default function LeadForm({ lead, onClose, onSaved }) {
             <div className="mb-3 flex items-center gap-2">
               <FileText className="h-4 w-4 text-indigo-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                Notes *
+                Notes
               </h3>
-              <span className="text-xs text-slate-400">Required</span>
+              <span className="text-xs text-slate-400">Optional</span>
             </div>
 
-            <Field label="Additional information *" error={errors.notes}>
+            <Field label="Additional information" error={errors.notes}>
               <textarea
                 name="notes"
                 rows={5}
-                required
                 maxLength={5000}
                 placeholder="Add the lead's requirements, budget, interests, or next steps..."
                 className={`${inputCls} min-h-28 resize-y`}

@@ -1,13 +1,17 @@
 import Redis from 'ioredis';
+import { env } from './env.js';
 
-export const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: Number(process.env.REDIS_PORT) || 6379,
+export const redisConfig = {
+  host: env.redisHost,
+  port: env.redisPort,
   maxRetriesPerRequest: null,
   retryStrategy: (times) => Math.min(times * 200, 3000),
-});
+  enableReadyCheck: false,
+};
 
-export const withTimeout = (promise, ms = 2000) =>
+export const redis = new Redis(redisConfig);
+
+export const withTimeout = (promise, ms = 3000) =>
   Promise.race([
     promise,
     new Promise((_, reject) =>

@@ -107,6 +107,8 @@ export async function listLeads(userId, query = {}) {
   }
 
   const page = Math.max(Number(query.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
+  const offset = (page - 1) * limit;
 
   const [count, result] = await Promise.all([
     pool.query(
@@ -123,7 +125,7 @@ export async function listLeads(userId, query = {}) {
        ORDER BY ${query.sort === 'created' ? 'created_at' : 'score'
       } ${query.order === 'asc' ? 'ASC' : 'DESC'},
        created_at DESC
-       LIMIT 10 OFFSET ${(page - 1) * 10}`,
+       LIMIT ${limit} OFFSET ${offset}`,
       params
     ),
   ]);
@@ -132,7 +134,7 @@ export async function listLeads(userId, query = {}) {
     leads: result.rows,
     total: count.rows[0].total,
     page,
-    pages: Math.ceil(count.rows[0].total / 10),
+    pages: Math.max(1, Math.ceil(count.rows[0].total / limit)),
   };
 }
 

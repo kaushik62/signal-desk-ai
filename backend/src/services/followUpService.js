@@ -18,6 +18,13 @@ async function addJob(followUp) {
       {
         jobId: followUp.id,
         delay,
+        attempts: 5,
+        backoff: {
+          type: 'exponential',
+          delay: 30000,
+        },
+        removeOnComplete: true,
+        removeOnFail: false,
       }
     ),
     5000
@@ -149,7 +156,7 @@ export async function scheduleFollowUp(userId, data) {
 
 // Get a user's follow-ups.
 export async function listFollowUps(userId, data = {}) {
-  const { status, leadId } = data;
+  const { status, leadId, limit } = data;
 
   const params = [userId];
 
@@ -174,7 +181,9 @@ export async function listFollowUps(userId, data = {}) {
     query += ` AND f.lead_id = $${params.length}`;
   }
 
-  query += ' ORDER BY f.scheduled_at DESC LIMIT 10';
+  const maxLimit = Math.min(Math.max(Number(limit) || 100, 1), 200);
+  params.push(maxLimit);
+  query += ` ORDER BY f.scheduled_at DESC LIMIT $${params.length}`;
 
   const { rows } = await pool.query(query, params);
 
@@ -275,23 +284,53 @@ export async function cancelForLead(leadId) {
   }
 }
 
-// Restore pending follow-ups missing from BullMQ.
+// Restore pending follow-ups missing from BullMQ and recover stuck jobs.
 export async function reconcile() {
   try {
-    const { rows } = await pool.query(
+    // 1. Recover any follow-ups that were left stuck in 'sending' or 'processing'
+    // from a crash or killed process.
+    const { rows: stuck } = await pool.query(
+      `UPDATE follow_ups
+       SET status = 'pending'
+       WHERE status IN ('sending', 'processing')
+       RETURNING id`
+    );
+
+    if (stuck.length > 0) {
+      console.log(`Reconciled ${stuck.length} stuck follow-up(s) to pending state`);
+    }
+
+    // 2. Sync BullMQ failed jobs back to the DB so they are not re-queued.
+    const { rows: pendingRows } = await pool.query(
       `SELECT id, scheduled_at
        FROM follow_ups
        WHERE status = 'pending'`
     );
 
-    for (const followUp of rows) {
-      const job = await withTimeout(
-        followUpQueue.getJob(followUp.id),
-        3000
-      );
+    for (const followUp of pendingRows) {
+      try {
+        const job = await withTimeout(
+          followUpQueue.getJob(followUp.id),
+          3000
+        );
 
-      if (!job) {
-        await addJob(followUp);
+        if (job) {
+          // If the BullMQ job has exhausted all retries, mark DB record as failed.
+          const state = await withTimeout(job.getState(), 3000);
+          if (state === 'failed') {
+            await pool.query(
+              `UPDATE follow_ups SET status = 'failed' WHERE id = $1 AND status = 'pending'`,
+              [followUp.id]
+            );
+            console.log(`Marked orphaned follow-up ${followUp.id} as failed (BullMQ job exhausted).`);
+          }
+          // Otherwise the job is already in the queue — do nothing.
+        } else {
+          // No job in BullMQ at all — re-queue it.
+          await addJob(followUp);
+        }
+      } catch (jobErr) {
+        console.error(`Error checking job ${followUp.id}:`, jobErr.message);
       }
     }
   } catch (error) {

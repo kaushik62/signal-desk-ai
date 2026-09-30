@@ -1,22 +1,19 @@
 import { Queue } from 'bullmq';
-import { redis } from '../config/redis.js';
+import { redisConfig } from '../config/redis.js';
 
 export const followUpQueue = new Queue('follow-ups', {
-  
-  connection: redis,
-
+  connection: redisConfig,
   defaultJobOptions: {
     attempts: 5,
-
     backoff: {
       type: 'exponential',
       delay: 30000,
     },
-
     removeOnComplete: true,
     removeOnFail: false,
   },
 });
+
 
 // Handle queue errors
 followUpQueue.on('error', (error) => {

@@ -1,10 +1,13 @@
 import nodemailer from 'nodemailer';
+import { env } from '../config/env.js';
 
-const smtpHost = process.env.SMTP_HOST;
-const smtpPort = Number(process.env.SMTP_PORT || 587);
-const smtpUser = process.env.SMTP_USER;
-const smtpPass = process.env.SMTP_PASS;
-const smtpFrom = process.env.SMTP_FROM || smtpUser;
+const {
+  host: smtpHost,
+  port: smtpPort,
+  user: smtpUser,
+  pass: smtpPass,
+  from: smtpFrom,
+} = env.smtp;
 
 const hasSmtp = Boolean(smtpHost);
 
