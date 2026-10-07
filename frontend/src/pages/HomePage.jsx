@@ -102,10 +102,7 @@ function Brand({ compact = false }) {
       aria-label="SignalDesk AI home"
       className="inline-flex items-center gap-2.5"
     >
-      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-500/20">
-        <Sparkles className="h-[18px] w-[18px] text-white" />
-      </span>
-
+     
       {!compact && (
         <span className="text-lg font-bold tracking-tight text-white">
           SignalDesk <span className="text-violet-300">AI</span>
@@ -403,10 +400,6 @@ function HeroSection() {
 
       <div className="mx-auto grid max-w-7xl items-center gap-16 px-5 pb-24 pt-12 sm:px-8 sm:pb-28 lg:grid-cols-2 lg:gap-12 lg:px-10 lg:py-28">
         <div className="max-w-2xl">
-          <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-violet-400/20 bg-violet-500/10 px-4 py-2 text-xs font-medium text-violet-200 sm:text-sm">
-            <Sparkles className="h-4 w-4" />
-            Your smarter Leads workspace
-          </div>
 
           <h1 className="text-4xl font-bold leading-[1.12] tracking-tight sm:text-5xl lg:text-6xl xl:text-7xl">
             Turn more leads into
@@ -475,11 +468,7 @@ function FeaturesSection() {
       <div className="mx-auto max-w-7xl px-5 sm:px-8 lg:px-10">
         {/* Section heading */}
         <div className="mx-auto mb-16 max-w-3xl text-center">
-          <span className="inline-flex items-center gap-2 rounded-full border border-violet-200 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-violet-700 shadow-sm">
-            <Zap className="h-4 w-4" />
-            Everything you need to grow
-          </span>
-
+         
           <h2 className="mt-6 text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
             Turn more leads into
             <span className="mt-2 block bg-gradient-to-r from-violet-700 via-purple-600 to-indigo-600 bg-clip-text text-transparent">
@@ -564,10 +553,7 @@ function HowItWorksSection() {
     >
       <div className="mx-auto max-w-7xl px-5 sm:px-8 lg:px-10">
         <div className="mx-auto mb-14 max-w-2xl text-center">
-          <span className="inline-flex items-center gap-2 rounded-full border border-violet-100 bg-white px-4 py-2 text-sm font-semibold text-violet-700">
-            <Zap className="h-4 w-4" />
-            A straightforward workflow
-          </span>
+         
 
           <h2 className="mt-5 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl lg:text-5xl">
             From new lead to
@@ -633,11 +619,7 @@ function CtaSection() {
 
           {/* Content */}
           <div className="relative mx-auto max-w-3xl text-center">
-            <div className="inline-flex items-center gap-2 rounded-full border border-violet-400/20 bg-violet-400/10 px-4 py-2 text-sm font-medium text-violet-200 shadow-lg shadow-violet-950/20">
-              <Sparkles className="h-4 w-4" />
-              Your next customer starts here
-            </div>
-
+            
             <h2 className="mt-8 text-3xl font-bold leading-tight tracking-tight text-white sm:text-5xl lg:text-6xl">
               Make every lead
               <span className="mt-2 block bg-gradient-to-r from-violet-300 via-purple-300 to-indigo-300 bg-clip-text text-transparent">
